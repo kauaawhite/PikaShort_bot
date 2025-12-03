@@ -25,7 +25,7 @@ bot.onText(/\/start/, (msg) => {
   const username = msg.from.username;
   const welcomeMessage = `😇 Hello, ${username}!\n\n`
     + 'Welcome to the Pikashort URL Shortener Bot!\n'
-    + 'You can use this bot to shorten URLs using the Indishort.live api service.\n\n'
+    + 'You can use this bot to shorten URLs using the Pikashort api service.\n\n'
     + 'To shorten a URL, just type or paste the URL directly in the chat, and the bot will provide you with the shortened URL.\n\n'
     + 'If you haven\'t set your Indishort API token yet, use the command:\n/setapi YOUR_Pikashort/Smallshorturl_API_TOKEN\n\n'
     + 'How To Use Me 👇👇 \n\n'
