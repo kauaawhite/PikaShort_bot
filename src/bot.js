@@ -5,7 +5,7 @@ const express = require('express');
 const app = express();
 
 app.get('/', (req, res) => {
-  res.send('Hello World!');
+  res.send('Bot is running successfully!');
 });
 
 const port = 8080;
@@ -13,110 +13,194 @@ app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
 
-// Retrieve the Telegram bot token from the environment variable
+// Load Telegram bot token
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
-// Create the Telegram bot instance
+// Create Telegram bot instance
 const bot = new TelegramBot(botToken, { polling: true });
 
-// Handle /start command
+
+// 🔥 FIRST MESSAGE WHEN BOT RESTARTS
+bot.on("polling_error", console.log);
+console.log(`
+🚀 I’m back, fam!  
+Bot is now fully online 🔥  
+
+All features are working perfectly again —  
+✅ Link Shortening  
+✅ Media + Forward Support  
+✅ Header/Footer Customization  
+✅ Instant Response  
+
+Aa jao sab 😎 — try your commands now!  
+/type /start or send any link 🔗
+`);
+
+
+// ==========================
+//      /start COMMAND
+// ==========================
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
-  const username = msg.from.username;
-  const welcomeMessage = `😇 Hello, ${username}!\n\n`
-    + 'Welcome to the Pikashort URL Shortener Bot!\n'
-    + 'This bot will always shorten this website URL for you: [Smallshorturl Website](https://smallshorturl.myvippanel.shop)\n\n'
-    + 'If you haven\'t set your API token yet, use:\n/setapi YOUR_API_KEY\n\n'
-    + 'How To Use Me 👇👇 \n\n'
-    + '✅ Go To [Smallshorturl Website](https://smallshorturl.myvippanel.shop) & Complete Registration.\n'
-    + '✅ Copy Your API Key from [API Page](https://smallshorturl.myvippanel.shop/member/tools/api)\n'
-    + '✅ Then add your API using command: /setapi YOUR_API_KEY\n\n'
-    + 'Made with ❤️ By: @Sahilkhan0785\n'
-    + '**Just send anything, and you will get the shortened Smallshorturl link!**';
+  const username = msg.from.username || "User";
 
-  bot.sendMessage(chatId, welcomeMessage, { parse_mode: "Markdown" });
+  const messageStart = `
+👋 Hello **${username}**!
+
+Send your **Smallshorturl API Key** from Dashboard:
+https://dashboard.smallshorturl.myvippanel.shop/member/tools/api
+
+Once your API key is set, just send any link — I will shorten it instantly 🔗🚀
+`;
+
+  bot.sendMessage(chatId, messageStart, { parse_mode: "Markdown" });
 });
 
-// Command: /setapi
+
+// ==========================
+//        SET API KEY
+// ==========================
 bot.onText(/\/setapi (.+)/, (msg, match) => {
   const chatId = msg.chat.id;
   const userToken = match[1].trim();
-  // Save the user's API token to the database
+
   saveUserToken(chatId, userToken);
 
-  const response = `Your Smallshorturl API token set successfully. ✅️✅️ Your token is: ${userToken}`;
-  bot.sendMessage(chatId, response);
+  const response = `
+✅ Your Smallshorturl API Key has been saved successfully!
+🔑 Token: *${userToken}*
+
+Now send any link to shorten it 🔗
+`;
+
+  bot.sendMessage(chatId, response, { parse_mode: "Markdown" });
 });
 
-// Listen for any message (works for ALL messages: text, photo, etc.)
+
+// ==========================
+//   MAIN MESSAGE HANDLER
+// ==========================
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
-  
-  // Don't respond to /start or /setapi messages here to avoid duplicate replies
-  const text = msg.text || msg.caption || "";
-  if (/^\/start/.test(text) || /^\/setapi/.test(text)) return;
 
-  // The fixed URL to be shortened (always this)
-  const fixedUrl = "https://smallshorturl.myvippanel.shop";
+  if (!msg.text && !msg.caption) return;
 
-  const shortenedLink = await shortenUrl(chatId, fixedUrl);
+  const text = msg.text || msg.caption;
+  const links = extractLinks(text);
 
-  if (shortenedLink) {
-    bot.sendMessage(chatId, `Here is your shortened link:\n${shortenedLink}`, {
-      reply_to_message_id: msg.message_id,
-    });
-  } else {
-    bot.sendMessage(chatId, `Failed to shorten the link. Please set your API key using /setapi YOUR_API_KEY and try again.`, {
-      reply_to_message_id: msg.message_id,
-    });
-  }
+  if (links.length === 0) return;
+
+  const shortenedLinks = await shortenMultipleLinks(chatId, links);
+
+  const updatedText = replaceLinksInText(text, links, shortenedLinks);
+
+  bot.sendMessage(chatId, updatedText, {
+    reply_to_message_id: msg.message_id,
+    parse_mode: "Markdown"
+  });
 });
 
-// Function to shorten a single URL
-async function shortenUrl(chatId, url) {
-  const apiToken = getUserToken(chatId);
 
-  if (!apiToken) {
-    bot.sendMessage(chatId, 'Please set up your Smallshorturl API token first. Use the command: /setapi YOUR_API_KEY');
+// ==========================
+//   EXTRACT URL FUNCTION
+// ==========================
+function extractLinks(text) {
+  const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,})([^\s]*)/g;
+  const links = [...text.matchAll(urlRegex)].map(m => m[0]);
+  return links;
+}
+
+
+// ==========================
+// REPLACE URL WITH SHORT URL
+// ==========================
+function replaceLinksInText(text, originalLinks, newLinks) {
+  let updated = text;
+  originalLinks.forEach((link, i) => {
+    updated = updated.replace(link, newLinks[i]);
+  });
+  return updated;
+}
+
+
+// ==========================
+// SHORT MULTIPLE LINKS
+// ==========================
+async function shortenMultipleLinks(chatId, links) {
+  const results = [];
+
+  for (const url of links) {
+    const shortUrl = await shortenUrl(chatId, url);
+    results.push(shortUrl || url);
+  }
+
+  return results;
+}
+
+
+// ==========================
+// SHORT A SINGLE URL
+// ==========================
+async function shortenUrl(chatId, url) {
+  const token = getUserToken(chatId);
+
+  if (!token) {
+    bot.sendMessage(chatId,
+      `❌ You haven't set your API Key yet.
+Use: /setapi YOUR_API_KEY`
+    );
     return null;
   }
 
   try {
-    const apiUrl = `https://smallshorturl.myvippanel.shop/api?api=${apiToken}&url=${encodeURIComponent(url)}`;
-    const response = await axios.get(apiUrl);
-    // Log the API response for debugging
-    console.log("API Response:", response.data);
-    // Pick the URL from the response (update key as per real API)
-    return response.data.shortenedUrl || 
-           response.data.shortened_url || 
-           response.data.short || 
-           response.data.url ||
-           response.data.result_url || 
-           null;
-  } catch (error) {
-    console.error('Shorten URL Error:', error?.response?.data || error?.message || error);
+    const apiURL = `https://smallshorturl.myvippanel.shop/api?api=${token}&url=${encodeURIComponent(url)}`;
+
+    const res = await axios.get(apiURL);
+
+    if (!res.data.shortenedUrl) return null;
+
+    const message = `
+✨✨ *Congratulations!* Your URL has been successfully shortened! 🚀🔗
+
+🔗 *Original URL:*  
+${url}
+
+🌐 *Shortened URL:*  
+${res.data.shortenedUrl}
+`;
+
+    bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+
+    return res.data.shortenedUrl;
+
+  } catch (err) {
+    console.error("Shorten error:", err);
+    bot.sendMessage(chatId, "⚠️ Error while shortening URL.");
     return null;
   }
 }
 
-// Function to save user's API token
+
+// ==========================
+// SAVE USER TOKEN
+// ==========================
 function saveUserToken(chatId, token) {
-  const dbData = getDatabaseData();
-  dbData[chatId] = token;
-  fs.writeFileSync('./src/database.json', JSON.stringify(dbData, null, 2));
+  const db = getDatabaseData();
+  db[chatId] = token;
+  fs.writeFileSync('./src/database.json', JSON.stringify(db, null, 2));
 }
 
-// Function to retrieve user's API token
+// GET USER TOKEN
 function getUserToken(chatId) {
-  const dbData = getDatabaseData();
-  return dbData[chatId];
+  const db = getDatabaseData();
+  return db[chatId];
 }
 
-// Function to read the database file
+// READ DATABASE
 function getDatabaseData() {
   try {
-    return JSON.parse(fs.readFileSync('./src/database.json', 'utf8'));
-  } catch (error) {
+    return JSON.parse(fs.readFileSync('./src/database.json'));
+  } catch {
     return {};
   }
 }
