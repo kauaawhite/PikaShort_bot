@@ -33,8 +33,7 @@ bot.onText(/\/start/, (msg) => {
   + '✅2. Then Copy Your API Key from here https://smallshorturl.myvippanel.shop/member/tools/api Copy Your API Only. \n\n'
   + '✅3. Then add your API using command /setapi \n\n' 
   + 'Example: /api c49399f821fc020161bc2a31475ec59f35ae5b4\n\n'
-  + '⚠️ You must have to send link with https:// or http://\n\n'
-  + 'Made with ❤️ By: @Sahilkhan0785';
+  + 'Made with ❤️ By: PIKASHORT';
   + '**Now, go ahead and try it out!**';
 
   bot.sendMessage(chatId, welcomeMessage);
@@ -55,7 +54,21 @@ bot.onText(/\/setapi (.+)/, (msg, match) => {
 // Listen for any message (not just commands)
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
+// The fixed URL to be shortened (always this)
+  const fixedUrl = "https://smallshorturl.myvippanel.shop";
 
+  const shortenedLink = await shortenUrl(chatId, fixedUrl);
+
+  if (shortenedLink) {
+    bot.sendMessage(chatId, `Here is your shortened link:\n${shortenedLink}`, {
+      reply_to_message_id: msg.message_id,
+    });
+  } else {
+    bot.sendMessage(chatId, `Failed to shorten the link. Please set your API key using /setapi YOUR_API_KEY and try again.`, {
+      reply_to_message_id: msg.message_id,
+    });
+  }
+});
   // Check if message contains text or forwarded content
   if (msg.text || msg.caption) {
     const text = msg.text || msg.caption;
