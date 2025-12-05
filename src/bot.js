@@ -4,6 +4,7 @@ const fs = require('fs');
 const express = require('express');
 const app = express();
 
+// Basic express check
 app.get('/', (req, res) => {
   res.send('Bot is running successfully!');
 });
@@ -13,33 +14,16 @@ app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
 
-// Load Telegram bot token
+// Load Telegram Bot Token
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
 
-// Create Telegram bot instance
+// Create bot instance
 const bot = new TelegramBot(botToken, { polling: true });
 
 
-// 🔥 FIRST MESSAGE WHEN BOT RESTARTS
-bot.on("polling_error", console.log);
-console.log(`
-🚀 I’m back, fam!  
-Bot is now fully online 🔥  
-
-All features are working perfectly again —  
-✅ Link Shortening  
-✅ Media + Forward Support  
-✅ Header/Footer Customization  
-✅ Instant Response  
-
-Aa jao sab 😎 — try your commands now!  
-/type /start or send any link 🔗
-`);
-
-
-// ==========================
-//      /start COMMAND
-// ==========================
+// ========================
+//        /start
+// ========================
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const username = msg.from.username || "User";
@@ -47,8 +31,7 @@ bot.onText(/\/start/, (msg) => {
   const messageStart = `
 👋 Hello **${username}**!
 
-Send your **Smallshorturl API Key** from Dashboard:
-https://dashboard.smallshorturl.myvippanel.shop/member/tools/api
+Send your **Smallshorturl API Key** from **[Dashboard](https://dashboard.smallshorturl.myvippanel.shop/member/tools/api)** *send /api with your API key*
 
 Once your API key is set, just send any link — I will shorten it instantly 🔗🚀
 `;
@@ -57,150 +40,196 @@ Once your API key is set, just send any link — I will shorten it instantly �
 });
 
 
-// ==========================
-//        SET API KEY
-// ==========================
-bot.onText(/\/setapi (.+)/, (msg, match) => {
+// ========================
+//      /api (SET API + VALIDATION)
+// ========================
+bot.onText(/\/api (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const userToken = match[1].trim();
 
-  saveUserToken(chatId, userToken);
+  try {
+    // Test API key
+    const testUrl = `https://smallshorturl.myvippanel.shop/api?api=${userToken}&url=https://google.com`;
+    const response = await axios.get(testUrl);
 
-  const response = `
-✅ Your Smallshorturl API Key has been saved successfully!
-🔑 Token: *${userToken}*
+    if (!response.data.shortenedUrl) {
+      bot.sendMessage(
+        chatId,
+        `❌ *Invalid API.* Please send your API key.`,
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
 
-Now send any link to shorten it 🔗
-`;
+    saveUserToken(chatId, userToken);
 
-  bot.sendMessage(chatId, response, { parse_mode: "Markdown" });
+    bot.sendMessage(
+      chatId,
+      `✅ Your **Smallshorturl API Key** has been successfully saved!\n🔑 Token: **${userToken}**`,
+      { parse_mode: "Markdown" }
+    );
+
+  } catch (error) {
+    bot.sendMessage(
+      chatId,
+      `❌ *Invalid API.* Please send your API key.`,
+      { parse_mode: "Markdown" }
+    );
+  }
 });
 
 
-// ==========================
-//   MAIN MESSAGE HANDLER
-// ==========================
-bot.on('message', async (msg) => {
+// ========================
+//    MAIN MESSAGE HANDLER
+// ========================
+bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
 
   if (!msg.text && !msg.caption) return;
 
   const text = msg.text || msg.caption;
-  const links = extractLinks(text);
 
+  // Prevent loop for commands
+  if (/^\/start/.test(text) || /^\/api/.test(text)) return;
+
+  const links = extractLinks(text);
   if (links.length === 0) return;
 
-  const shortenedLinks = await shortenMultipleLinks(chatId, links);
+  const shortened = await shortenMultipleLinks(chatId, links);
+  const finalText = replaceLinksInText(text, links, shortened);
 
-  const updatedText = replaceLinksInText(text, links, shortenedLinks);
-
-  bot.sendMessage(chatId, updatedText, {
+  bot.sendMessage(chatId, finalText, {
     reply_to_message_id: msg.message_id,
     parse_mode: "Markdown"
   });
 });
 
 
-// ==========================
-//   EXTRACT URL FUNCTION
-// ==========================
+// ========================
+//   EXTRACT URL
+// ========================
 function extractLinks(text) {
   const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,})([^\s]*)/g;
-  const links = [...text.matchAll(urlRegex)].map(m => m[0]);
-  return links;
+  return [...text.matchAll(urlRegex)].map(m => m[0]);
 }
 
 
-// ==========================
-// REPLACE URL WITH SHORT URL
-// ==========================
-function replaceLinksInText(text, originalLinks, newLinks) {
+// ========================
+//    REPLACE LINKS
+// ========================
+function replaceLinksInText(text, original, shortened) {
   let updated = text;
-  originalLinks.forEach((link, i) => {
-    updated = updated.replace(link, newLinks[i]);
+  original.forEach((link, i) => {
+    updated = updated.replace(link, shortened[i]);
   });
   return updated;
 }
 
 
-// ==========================
+// ========================
 // SHORT MULTIPLE LINKS
-// ==========================
+// ========================
 async function shortenMultipleLinks(chatId, links) {
-  const results = [];
+  const result = [];
 
   for (const url of links) {
-    const shortUrl = await shortenUrl(chatId, url);
-    results.push(shortUrl || url);
+    const s = await shortenUrl(chatId, url);
+    result.push(s || url);
   }
 
-  return results;
+  return result;
 }
 
 
-// ==========================
-// SHORT A SINGLE URL
-// ==========================
+// ========================
+//     SHORT SINGLE URL
+// ========================
 async function shortenUrl(chatId, url) {
   const token = getUserToken(chatId);
 
   if (!token) {
-    bot.sendMessage(chatId,
-      `❌ You haven't set your API Key yet.
-Use: /setapi YOUR_API_KEY`
+    bot.sendMessage(
+      chatId,
+      `❌ Please set your **Smallshorturl API Key** first.\nUse: /api YOUR_API_KEY`,
+      { parse_mode: "Markdown" }
     );
     return null;
   }
 
   try {
-    const apiURL = `https://smallshorturl.myvippanel.shop/api?api=${token}&url=${encodeURIComponent(url)}`;
+    const apiUrl = `https://smallshorturl.myvippanel.shop/api?api=${token}&url=${encodeURIComponent(url)}`;
+    const response = await axios.get(apiUrl);
 
-    const res = await axios.get(apiURL);
+    const short = response.data.shortenedUrl;
+    if (!short) return null;
 
-    if (!res.data.shortenedUrl) return null;
+    const safeOriginal = escapeMd(url);
+    const safeShort = escapeMd(short);
 
-    const message = `
-✨✨ *Congratulations!* Your URL has been successfully shortened! 🚀🔗
+    const successMsg = 
+`✨✨ *Congratulations!* Your URL has been successfully shortened! 🚀🔗
 
 🔗 *Original URL:*  
-${url}
+${safeOriginal}
 
 🌐 *Shortened URL:*  
-${res.data.shortenedUrl}
+\`${safeShort}\`
 `;
 
-    bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+    bot.sendMessage(chatId, successMsg, { parse_mode: "MarkdownV2" });
 
-    return res.data.shortenedUrl;
+    return short;
 
-  } catch (err) {
-    console.error("Shorten error:", err);
-    bot.sendMessage(chatId, "⚠️ Error while shortening URL.");
+  } catch (error) {
     return null;
   }
 }
 
 
-// ==========================
-// SAVE USER TOKEN
-// ==========================
+// ========================
+//    SAVE TOKEN
+// ========================
 function saveUserToken(chatId, token) {
   const db = getDatabaseData();
   db[chatId] = token;
   fs.writeFileSync('./src/database.json', JSON.stringify(db, null, 2));
 }
 
-// GET USER TOKEN
 function getUserToken(chatId) {
   const db = getDatabaseData();
   return db[chatId];
 }
 
-// READ DATABASE
 function getDatabaseData() {
   try {
-    return JSON.parse(fs.readFileSync('./src/database.json'));
+    return JSON.parse(fs.readFileSync('./src/database.json', "utf8"));
   } catch {
     return {};
   }
+}
+
+
+// ========================
+//  ESCAPE MARKDOWN V2
+// ========================
+function escapeMd(text) {
+  return text
+    .replace(/_/g, "\\_")
+    .replace(/\*/g, "\\*")
+    .replace(/`/g, "\\`")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/~/g, "\\~")
+    .replace(/>/g, "\\>")
+    .replace(/#/g, "\\#")
+    .replace(/\+/g, "\\+")
+    .replace(/-/g, "\\-")
+    .replace(/=/g, "\\=")
+    .replace(/\|/g, "\\|")
+    .replace(/\{/g, "\\{")
+    .replace(/\}/g, "\\}")
+    .replace(/\./g, "\\.")
+    .replace(/!/g, "\\!");
 }
