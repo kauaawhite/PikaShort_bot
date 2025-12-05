@@ -1,11 +1,10 @@
-// bot.js - FIXED bot6.js (message handler, HTML escaping, admin add, robust API handling)
+// bot.js - fixed: admin chat IDs & formatted shortened message
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const fs = require('fs');
 const express = require('express');
 const app = express();
 
-// Express health check
 app.get('/', (req, res) => {
   res.send('Bot V7 is running ✅');
 });
@@ -19,7 +18,8 @@ if (!BOT_TOKEN) {
 }
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// Admin password
+// ===== ADMIN & OWNER =====
+const ALLOWED_ADMIN_IDS = [6358090699, 6195012318]; // Only these chat IDs can become admin/owner
 const ADMIN_PASSWORD = 'afiya1310';
 
 // Header / Footer (OFF)
@@ -48,7 +48,6 @@ function readDB() {
 
 // Write DB
 function writeDB(db) {
-  // ensure dir exists
   try {
     const dir = DB_PATH.split('/').slice(0, -1).join('/');
     if (dir && !fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -91,7 +90,7 @@ function getAllUsers() {
   return Object.keys(readDB().lastActive || {});
 }
 
-// /start
+// ===== /start =====
 bot.onText(/\/start/, msg => {
   const chatId = msg.chat.id;
   const username = msg.from.username || msg.from.first_name || 'User';
@@ -105,7 +104,7 @@ bot.onText(/\/start/, msg => {
   bot.sendMessage(chatId, text, { parse_mode: "HTML", disable_web_page_preview: true });
 });
 
-// /api <key>
+// ===== /api <key> =====
 bot.onText(/\/api (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
   const token = match[1].trim();
@@ -116,8 +115,6 @@ bot.onText(/\/api (.+)/, async (msg, match) => {
     // quick test: try shortening google.com to validate token
     const testUrl = `https://smallshorturl.myvippanel.shop/api?api=${encodeURIComponent(token)}&url=https://google.com`;
     const res = await axios.get(testUrl, { timeout: 8000 });
-
-    // try multiple possible keys
     const short =
       res.data?.shortenedUrl ||
       res.data?.shortened_url ||
@@ -139,18 +136,30 @@ bot.onText(/\/api (.+)/, async (msg, match) => {
   }
 });
 
-// /addadmin <password>
+// ===== /addadmin <password> =====
 bot.onText(/\/addadmin (.+)/, (msg, match) => {
   const chatId = msg.chat.id;
   const password = match[1].trim();
-  if (password !== ADMIN_PASSWORD) return bot.sendMessage(chatId, "❌ Wrong admin password.");
+
+  if (!ALLOWED_ADMIN_IDS.includes(chatId)) {
+    return bot.sendMessage(chatId, "❌ You are not allowed to use this command.");
+  }
+
+  if (password !== ADMIN_PASSWORD) {
+    return bot.sendMessage(chatId, "❌ Wrong admin password.");
+  }
+
+  if (isAdmin(chatId)) {
+    return bot.sendMessage(chatId, "⚠️ You are already an admin.");
+  }
+
   addAdmin(chatId);
   bot.sendMessage(chatId, "✅ You are now an admin.");
 });
 
 // FAST API CHECK (lightweight)
 async function fastValidateApi(token) {
-  return token && token.length >= 8; // simple length check — optional
+  return token && token.length >= 8;
 }
 
 // Extract URLs
@@ -178,22 +187,15 @@ async function shortenMultiple(chatId, links) {
 async function shortenSingle(chatId, url) {
   const token = getUserToken(chatId);
 
-  if (!token) {
-    // do not spam user for every link; throw so caller can notify once
-    throw new Error('NO_API_TOKEN');
-  }
+  if (!token) throw new Error('NO_API_TOKEN');
 
-  // FAST validation
   const isValid = await fastValidateApi(token);
-  if (!isValid) {
-    throw new Error('INVALID_API_TOKEN');
-  }
+  if (!isValid) throw new Error('INVALID_API_TOKEN');
 
   try {
     const apiUrl = `https://smallshorturl.myvippanel.shop/api?api=${encodeURIComponent(token)}&url=${encodeURIComponent(url)}`;
     const res = await axios.get(apiUrl, { timeout: 10000 });
 
-    // Support multiple possible response keys
     const short =
       res.data?.shortenedUrl ||
       res.data?.shortened_url ||
@@ -203,22 +205,18 @@ async function shortenSingle(chatId, url) {
       null;
 
     if (!short) {
-      console.warn('shortenSingle: unexpected API response', res.data);
       throw new Error('API_NO_SHORT');
     }
 
-    // update last active since user used shortening
     saveLastActive(chatId);
 
     return short;
   } catch (err) {
-    // pass error up so caller can format user message
-    console.error('shortenSingle error:', err?.response?.data || err?.message || err);
     throw err;
   }
 }
 
-// Message handler: listens for any user message and shortens links inside
+// ======= MESSAGE HANDLER =======
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text || msg.caption || '';
@@ -230,14 +228,9 @@ bot.on('message', async (msg) => {
 
   const links = extractLinks(text);
   if (!links || links.length === 0) {
-    // if you want to automatically shorten your own fixed site when no link provided,
-    // uncomment next lines and change fixedUrl below:
-    // const fixedUrl = 'https://smallshorturl.myvippanel.shop';
-    // try { const short = await shortenSingle(chatId, fixedUrl); bot.sendMessage(chatId, `<b>Short:</b>\n<code>${escapeHtml(short)}</code>`, { parse_mode: 'HTML' }); } catch(e){}
     return;
   }
 
-  // try to shorten all links; collect results and report
   let shortened = [];
   try {
     shortened = await shortenMultiple(chatId, links);
@@ -252,30 +245,29 @@ bot.on('message', async (msg) => {
     }
   }
 
-  // Build a friendly reply
-  const parts = links.map((orig, idx) => {
+  // ------ CUSTOM formatted reply (one link ko sahi format me send kare) ------
+  links.forEach((orig, idx) => {
     const s = shortened[idx];
     if (!s) {
-      return `<b>Original:</b>\n<code>${escapeHtml(orig)}</code>\n<b>Shortening failed.</b>`;
+      return bot.sendMessage(chatId, `<b>Shortening failed for:</b>\n<code>${escapeHtml(orig)}</code>`, { parse_mode: 'HTML', reply_to_message_id: msg.message_id });
     }
-    return `<b>Original:</b>\n<code>${escapeHtml(orig)}</code>\n<b>Short:</b>\n<code>${escapeHtml(s)}</code>`;
+    // Congratulation style reply
+    const reply =
+      `✨✨ Congratulations! Your URL has been successfully shortened! 🚀\n\n` +
+      `🔗 <b>Original URL:</b>\n${escapeHtml(orig)}\n\n` +
+      `🌐 <b>Shortened URL:</b>\n<code>${escapeHtml(s)}</code>`;
+    bot.sendMessage(chatId, reply, { parse_mode: 'HTML', reply_to_message_id: msg.message_id, disable_web_page_preview: true });
   });
-
-  // optional header/footer
-  let reply = parts.join('\n\n');
-  if (headerFooterEnabled) reply = `<b>${escapeHtml(headerText)}</b>\n\n` + reply + `\n\n<b>${escapeHtml(footerText)}</b>`;
-
-  bot.sendMessage(chatId, reply, { parse_mode: 'HTML', reply_to_message_id: msg.message_id, disable_web_page_preview: true });
 });
 
-// /sendads
+// -- CUSTOM TEXT ADS HANDLER (NEW!) --
 bot.onText(/\/sendads/, (msg) => {
   const chatId = msg.chat.id;
   if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ You are not authorized.");
 
   bot.sendMessage(chatId, "📝 Send the text message you want to broadcast to all users!");
 
-  // Listener for admin's next message (within 2 min)
+  // Wait for admin's next text message (within 2 min)
   const listener = (m) => {
     if (m.chat.id !== chatId || !m.text) return;
     const adText = m.text;
@@ -295,7 +287,7 @@ bot.onText(/\/sendads/, (msg) => {
   setTimeout(() => bot.removeListener("message", messageWatcher), 2 * 60 * 1000);
 });
 
-// /sendimgads
+// IMAGE AD BROADCAST (/sendimgads)
 bot.onText(/\/sendimgads/, (msg) => {
   const chatId = msg.chat.id;
   if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ You are not authorized.");
@@ -304,7 +296,6 @@ bot.onText(/\/sendimgads/, (msg) => {
 
   const listener = (m) => {
     if (!m.photo || m.from.id !== chatId) return;
-
     const fileId = m.photo[m.photo.length - 1].file_id;
     const caption = m.caption || "";
     const users = getAllUsers();
@@ -323,7 +314,7 @@ bot.onText(/\/sendimgads/, (msg) => {
   setTimeout(() => bot.removeListener("message", messageWatcher), 2 * 60 * 1000);
 });
 
-// /sendvideoads
+// VIDEO AD BROADCAST (/sendvideoads)
 bot.onText(/\/sendvideoads/, (msg) => {
   const chatId = msg.chat.id;
   if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ You are not authorized.");
@@ -332,7 +323,6 @@ bot.onText(/\/sendvideoads/, (msg) => {
 
   const listener = (m) => {
     if (!m.video || m.from.id !== chatId) return;
-
     const fileId = m.video.file_id;
     const caption = m.caption || "";
     const users = getAllUsers();
@@ -367,4 +357,4 @@ setInterval(() => {
 }, INACTIVE_CHECK_INTERVAL_HOURS * 3600000);
 
 // Startup message
-console.log("Bot V7 started successfully! 🚀 (Fixed message handler, HTML replies, admin add)");
+console.log("Bot V7 started successfully! 🚀 (owner/admin check, congratulations message, improved ad command)");
