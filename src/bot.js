@@ -1,235 +1,321 @@
+// bot.js - FINAL FIXED VERSION (V8)
+// Fixes: Added Link Listener, Admin Login, and Auto-Directory Creation
+
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const fs = require('fs');
+const path = require('path'); // Added for directory safety
 const express = require('express');
 const app = express();
 
-// Basic express check
+// Express health check
 app.get('/', (req, res) => {
-  res.send('Bot is running successfully!');
+  res.send('Bot V8 (Fixed) is running ✅');
 });
+app.listen(8080, () => console.log('Server listening on port 8080'));
 
-const port = 8080;
-app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
-});
+// ---------- CONFIG ----------
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+if (!BOT_TOKEN) {
+  console.error('Please set TELEGRAM_BOT_TOKEN env variable.');
+  process.exit(1);
+}
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
-// Load Telegram Bot Token
-const botToken = process.env.TELEGRAM_BOT_TOKEN;
+// Admin password
+const ADMIN_PASSWORD = 'jadu1310';
 
-// Create bot instance
-const bot = new TelegramBot(botToken, { polling: true });
+// Inactive user config
+const INACTIVE_DAYS = 3;
+const INACTIVE_CHECK_INTERVAL_HOURS = 12;
+const inactiveMessage = `👋 Hey! It’s been a while since you used me.  
+Need to shorten links? Just send me any URL 🔗  
+I'm here to help 😎`;
 
-
-// ========================
-//        /start
-// ========================
-bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-  const username = msg.from.username || "User";
-
-  const messageStart = `
-👋 Hello **${username}**!
-
-Send your **Smallshorturl API Key** from **[Dashboard](https://dashboard.smallshorturl.myvippanel.shop/member/tools/api)** *send /api with your API key*
-
-Once your API key is set, just send any link — I will shorten it instantly 🔗🚀
+// Default Ads Message
+const adsMessage = `
+🔥 *SPECIAL OFFER!* Earn More With SmallshortURL!  
+Visit 👉 https://smallshorturl.myvippanel.shop
 `;
 
-  bot.sendMessage(chatId, messageStart, { parse_mode: "Markdown" });
+// Database Path
+const DB_PATH = './src/database.json';
+
+// --- FIX 1: Ensure Database Directory Exists ---
+const dbDir = path.dirname(DB_PATH);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
+// Read DB
+function readDB() {
+  try {
+    if (!fs.existsSync(DB_PATH)) {
+      return { tokens: {}, lastActive: {}, admins: [] };
+    }
+    return JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
+  } catch {
+    return { tokens: {}, lastActive: {}, admins: [] };
+  }
+}
+
+// Write DB
+function writeDB(db) {
+  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+}
+
+// Markdown Escape
+function escapeMdV2(text) {
+  if (!text && text !== '') return '';
+  return String(text)
+    .replace(/\\/g, '\\\\').replace(/_/g, '\\_').replace(/\*/g, '\\*')
+    .replace(/\[/g, '\\[').replace(/\]/g, '\\]').replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)').replace(/~/g, '\\~').replace(/`/g, '\\`')
+    .replace(/>/g, '\\>').replace(/#/g, '\\#').replace(/\+/g, '\\+')
+    .replace(/-/g, '\\-').replace(/=/g, '\\=').replace(/\|/g, '\\|')
+    .replace(/\{/g, '\\{').replace(/\}/g, '\\}').replace(/\./g, '\\.')
+    .replace(/!/g, '\\!');
+}
+
+// DB Helpers
+function saveUserToken(chatId, token) {
+  const db = readDB();
+  db.tokens[chatId] = token;
+  writeDB(db);
+}
+function getUserToken(chatId) {
+  return readDB().tokens[chatId];
+}
+function saveLastActive(chatId) {
+  const db = readDB();
+  db.lastActive[chatId] = Date.now();
+  writeDB(db);
+}
+function addAdmin(chatId) {
+  const db = readDB();
+  if (!db.admins.includes(chatId)) db.admins.push(chatId);
+  writeDB(db);
+}
+function isAdmin(chatId) {
+  return readDB().admins.includes(chatId);
+}
+function getAllUsers() {
+  return Object.keys(readDB().lastActive || {});
+}
+
+// --- COMMANDS ---
+
+// /start
+bot.onText(/\/start/, msg => {
+  const chatId = msg.chat.id;
+  const username = msg.from.username || msg.from.first_name || 'User';
+
+  saveLastActive(chatId);
+
+  const text = `👋 Hello *${escapeMdV2(username)}*!\n\n` +
+    `Send your *Smallshorturl API Key* from *[Dashboard](https://smallshorturl.myvippanel.shop/member/tools/api)* (send /api with your api)\n\n` +
+    `Once your API key is set, just send any link — I will shorten it instantly 🔗🚀`;
+
+  bot.sendMessage(chatId, text, { parse_mode: "MarkdownV2" });
 });
 
-
-// ========================
-//      /api (SET API + VALIDATION)
-// ========================
+// /api <key>
 bot.onText(/\/api (.+)/, async (msg, match) => {
   const chatId = msg.chat.id;
-  const userToken = match[1].trim();
+  const token = match[1].trim();
+
+  saveLastActive(chatId);
 
   try {
-    // Test API key
-    const testUrl = `https://smallshorturl.myvippanel.shop/api?api=${userToken}&url=https://google.com`;
-    const response = await axios.get(testUrl);
+    // Basic format check
+    if(token.length < 10) throw new Error("Short Token");
 
-    if (!response.data.shortenedUrl) {
-      bot.sendMessage(
-        chatId,
-        `❌ *Invalid API.* Please send your API key.`,
-        { parse_mode: "Markdown" }
-      );
-      return;
+    const testUrl = `https://smallshorturl.myvippanel.shop/api?api=${token}&url=https://google.com`;
+    const res = await axios.get(testUrl);
+
+    if (!res.data.shortenedUrl) {
+      return bot.sendMessage(chatId, "❌ Invalid API. Please send your API key.");
     }
 
-    saveUserToken(chatId, userToken);
-
-    bot.sendMessage(
-      chatId,
-      `✅ Your **Smallshorturl API Key** has been successfully saved!\n🔑 Token: **${userToken}**`,
-      { parse_mode: "Markdown" }
-    );
-
-  } catch (error) {
-    bot.sendMessage(
-      chatId,
-      `❌ *Invalid API.* Please send your API key.`,
-      { parse_mode: "Markdown" }
-    );
+    saveUserToken(chatId, token);
+    bot.sendMessage(chatId, "✅ API Saved Successfully! Now send me any link.");
+  } catch {
+    bot.sendMessage(chatId, "❌ Invalid API or Connection Error.");
   }
 });
 
-
-// ========================
-//    MAIN MESSAGE HANDLER
-// ========================
-bot.on("message", async (msg) => {
+// --- FIX 2: Admin Login Command ---
+bot.onText(/\/adminlogin (.+)/, (msg, match) => {
   const chatId = msg.chat.id;
+  const password = match[1].trim();
 
-  if (!msg.text && !msg.caption) return;
+  // Delete user message for security
+  try { bot.deleteMessage(chatId, msg.message_id); } catch(e){}
 
-  const text = msg.text || msg.caption;
-
-  // Prevent loop for commands
-  if (/^\/start/.test(text) || /^\/api/.test(text)) return;
-
-  const links = extractLinks(text);
-  if (links.length === 0) return;
-
-  const shortened = await shortenMultipleLinks(chatId, links);
-  const finalText = replaceLinksInText(text, links, shortened);
-
-  bot.sendMessage(chatId, finalText, {
-    reply_to_message_id: msg.message_id,
-    parse_mode: "Markdown"
-  });
+  if (password === ADMIN_PASSWORD) {
+    addAdmin(chatId);
+    bot.sendMessage(chatId, "✅ *Password Accepted!* You are now an Admin.", {parse_mode: "Markdown"});
+  } else {
+    bot.sendMessage(chatId, "❌ Wrong Password!");
+  }
 });
 
+// FAST API CHECK
+async function fastValidateApi(token) {
+  return token && token.length >= 10;
+}
 
-// ========================
-//   EXTRACT URL
-// ========================
+// Extract URLs
 function extractLinks(text) {
-  const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9-]+\.[a-zA-Z]{2,})([^\s]*)/g;
-  return [...text.matchAll(urlRegex)].map(m => m[0]);
+  const re = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-z0-9.-]+\.[a-z]{2,})/gi;
+  if (!text) return [];
+  return [...text.matchAll(re)].map(m => m[0]);
 }
 
-
-// ========================
-//    REPLACE LINKS
-// ========================
-function replaceLinksInText(text, original, shortened) {
-  let updated = text;
-  original.forEach((link, i) => {
-    updated = updated.replace(link, shortened[i]);
-  });
-  return updated;
-}
-
-
-// ========================
-// SHORT MULTIPLE LINKS
-// ========================
-async function shortenMultipleLinks(chatId, links) {
-  const result = [];
-
-  for (const url of links) {
-    const s = await shortenUrl(chatId, url);
-    result.push(s || url);
-  }
-
-  return result;
-}
-
-
-// ========================
-//     SHORT SINGLE URL
-// ========================
-async function shortenUrl(chatId, url) {
+// Shorten Single
+async function shortenSingle(chatId, url) {
   const token = getUserToken(chatId);
 
   if (!token) {
-    bot.sendMessage(
-      chatId,
-      `❌ Please set your **Smallshorturl API Key** first.\nUse: /api YOUR_API_KEY`,
-      { parse_mode: "Markdown" }
-    );
+    bot.sendMessage(chatId, "❌ Please set your *Smallshorturl API Key* first.\nUse: /api YOUR_API_KEY", { parse_mode: "Markdown" });
+    return null;
+  }
+
+  const isValid = await fastValidateApi(token);
+  if (!isValid) {
+    bot.sendMessage(chatId, "❌ Invalid API Format. Please check your key.", { parse_mode: "Markdown" });
     return null;
   }
 
   try {
     const apiUrl = `https://smallshorturl.myvippanel.shop/api?api=${token}&url=${encodeURIComponent(url)}`;
-    const response = await axios.get(apiUrl);
+    const res = await axios.get(apiUrl);
 
-    const short = response.data.shortenedUrl;
+    const short = res.data?.shortenedUrl || null;
     if (!short) return null;
 
-    const safeOriginal = escapeMd(url);
-    const safeShort = escapeMd(short);
+    const safeOrig = escapeMdV2(url);
+    const safeShort = escapeMdV2(short);
 
-    const successMsg = 
-`✨✨ *Congratulations!* Your URL has been successfully shortened! 🚀🔗
+    const msg =
+      `✨✨ *Congratulations!* Your URL has been successfully shortened! 🚀🔗\n\n` +
+      `🔗 *Original URL:* \n\`${safeOrig}\`\n\n` +
+      `🌐 *Shortened URL:* \n\`${safeShort}\``;
 
-🔗 *Original URL:*  
-${safeOriginal}
-
-🌐 *Shortened URL:*  
-\`${safeShort}\`
-`;
-
-    bot.sendMessage(chatId, successMsg, { parse_mode: "MarkdownV2" });
+    bot.sendMessage(chatId, msg, { parse_mode: "MarkdownV2" });
 
     return short;
-
-  } catch (error) {
+  } catch (e) {
+    console.error(e);
     return null;
   }
 }
 
+// --- FIX 3: Link Listener (The Missing Part) ---
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
 
-// ========================
-//    SAVE TOKEN
-// ========================
-function saveUserToken(chatId, token) {
-  const db = getDatabaseData();
-  db[chatId] = token;
-  fs.writeFileSync('./src/database.json', JSON.stringify(db, null, 2));
-}
+  // Ignore if message starts with '/' (Commands)
+  if (msg.text && msg.text.startsWith('/')) return;
+  
+  // Ignore if not text
+  if (!msg.text) return;
 
-function getUserToken(chatId) {
-  const db = getDatabaseData();
-  return db[chatId];
-}
-
-function getDatabaseData() {
-  try {
-    return JSON.parse(fs.readFileSync('./src/database.json', "utf8"));
-  } catch {
-    return {};
+  const links = extractLinks(msg.text);
+  
+  if (links.length > 0) {
+    saveLastActive(chatId);
+    // Shorten the first link found
+    await shortenSingle(chatId, links[0]);
   }
-}
+});
 
+// /sendads
+bot.onText(/\/sendads/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ You are not authorized.");
 
-// ========================
-//  ESCAPE MARKDOWN V2
-// ========================
-function escapeMd(text) {
-  return text
-    .replace(/_/g, "\\_")
-    .replace(/\*/g, "\\*")
-    .replace(/`/g, "\\`")
-    .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]")
-    .replace(/\(/g, "\\(")
-    .replace(/\)/g, "\\)")
-    .replace(/~/g, "\\~")
-    .replace(/>/g, "\\>")
-    .replace(/#/g, "\\#")
-    .replace(/\+/g, "\\+")
-    .replace(/-/g, "\\-")
-    .replace(/=/g, "\\=")
-    .replace(/\|/g, "\\|")
-    .replace(/\{/g, "\\{")
-    .replace(/\}/g, "\\}")
-    .replace(/\./g, "\\.")
-    .replace(/!/g, "\\!");
-}
+  const users = getAllUsers();
+  let count = 0;
+  users.forEach(uid => {
+    try { 
+        bot.sendMessage(uid, adsMessage, { parse_mode: "Markdown" }); 
+        count++;
+    } catch {}
+  });
+
+  bot.sendMessage(chatId, `📢 Ads sent to ${count} users successfully!`);
+});
+
+// /sendimgads
+bot.onText(/\/sendimgads/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ You are not authorized.");
+
+  bot.sendMessage(chatId, "📸 Send the image you want to broadcast!");
+
+  const listener = (m) => {
+    if (m.chat.id !== chatId) return; // Security check
+    if (!m.photo) return;
+
+    const fileId = m.photo[m.photo.length - 1].file_id;
+    const caption = m.caption || "";
+    const users = getAllUsers();
+
+    users.forEach(uid => bot.sendPhoto(uid, fileId, { caption, parse_mode: "Markdown" }).catch(()=>{}));
+    bot.sendMessage(chatId, "📢 Image Ads sent successfully!");
+
+    bot.removeListener("message", messageWatcher);
+  };
+
+  const messageWatcher = (m) => listener(m);
+  bot.on("message", messageWatcher);
+
+  // Timeout to stop listening if admin doesn't send image
+  setTimeout(() => bot.removeListener("message", messageWatcher), 60 * 1000);
+});
+
+// /sendvideoads
+bot.onText(/\/sendvideoads/, (msg) => {
+  const chatId = msg.chat.id;
+  if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ You are not authorized.");
+
+  bot.sendMessage(chatId, "🎬 Send the video you want to broadcast!");
+
+  const listener = (m) => {
+    if (m.chat.id !== chatId) return;
+    if (!m.video) return;
+
+    const fileId = m.video.file_id;
+    const caption = m.caption || "";
+    const users = getAllUsers();
+
+    users.forEach(uid => bot.sendVideo(uid, fileId, { caption, parse_mode: "Markdown" }).catch(()=>{}));
+    bot.sendMessage(chatId, "📢 Video Ads sent successfully!");
+
+    bot.removeListener("message", messageWatcher);
+  };
+
+  const messageWatcher = (m) => listener(m);
+  bot.on("message", messageWatcher);
+
+  setTimeout(() => bot.removeListener("message", messageWatcher), 60 * 1000);
+});
+
+// Inactive user auto-message
+setInterval(() => {
+  const db = readDB();
+  const now = Date.now();
+  const limit = INACTIVE_DAYS * 86400000;
+
+  for (const uid of Object.keys(db.lastActive || {})) {
+    if (now - db.lastActive[uid] >= limit) {
+      bot.sendMessage(uid, inactiveMessage, { parse_mode: "Markdown" }).catch(()=>{});
+      db.lastActive[uid] = now; // Reset so we don't spam instantly
+    }
+  }
+  writeDB(db);
+}, INACTIVE_CHECK_INTERVAL_HOURS * 3600000);
+
+// Startup message
+console.log("Bot V8 started successfully! 🚀 (Full Features + Fixes Applied)");
