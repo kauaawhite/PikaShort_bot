@@ -34,13 +34,6 @@ const inactiveMessage = `👋 Hey! It’s been a while since you used me.
 Need to shorten links? Just send me any URL 🔗  
 I'm here to help 😎`;
 
-// Default Ads Message
-const adsMessage = `
-🔥 <b>SPECIAL OFFER!</b>  
-Earn More With SmallshortURL!  
-Visit 👉 https://smallshorturl.myvippanel.shop
-`;
-
 // Database Path
 const DB_PATH = './src/database.json';
 
@@ -280,12 +273,26 @@ bot.onText(/\/sendads/, (msg) => {
   const chatId = msg.chat.id;
   if (!isAdmin(chatId)) return bot.sendMessage(chatId, "❌ You are not authorized.");
 
-  const users = getAllUsers();
-  users.forEach(uid => {
-    try { bot.sendMessage(uid, adsMessage, { parse_mode: "HTML", disable_web_page_preview: true }); } catch (e) {}
-  });
+  bot.sendMessage(chatId, "📝 Send the text message you want to broadcast to all users!");
 
-  bot.sendMessage(chatId, "📢 Ads sent to all users successfully!");
+  // Listener for admin's next message (within 2 min)
+  const listener = (m) => {
+    if (m.chat.id !== chatId || !m.text) return;
+    const adText = m.text;
+    const users = getAllUsers();
+
+    users.forEach(uid => {
+      try { bot.sendMessage(uid, adText, { parse_mode: "HTML" }); } catch (e) {}
+    });
+    bot.sendMessage(chatId, "📢 Text Ad sent successfully!");
+
+    bot.removeListener("message", messageWatcher);
+  };
+
+  const messageWatcher = (m) => listener(m);
+  bot.on("message", messageWatcher);
+
+  setTimeout(() => bot.removeListener("message", messageWatcher), 2 * 60 * 1000);
 });
 
 // /sendimgads
