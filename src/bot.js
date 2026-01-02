@@ -98,7 +98,7 @@ bot.onText(/\/start/, msg => {
   saveLastActive(chatId);
 
   const text = `👋 Hello <b>${escapeHtml(username)}</b>!\n\n` +
-    `Send your <b>Smallshorturl API Key</b> from <a href="https://smallshorturl.myvippanel.shop/member/tools/api">Dashboard</a> (use /api YOUR_API_KEY)\n\n` +
+    `Send your <b>PikaShort API Key</b> from <a href="https://PikaShort.myvippanel.shop/member/tools/api">Dashboard</a> (use /api YOUR_API_KEY)\n\n` +
     `Once your API key is set, just send any link — I will shorten it instantly 🔗🚀`;
 
   bot.sendMessage(chatId, text, { parse_mode: "HTML", disable_web_page_preview: true });
@@ -113,7 +113,7 @@ bot.onText(/\/api (.+)/, async (msg, match) => {
 
   try {
     // quick test: try shortening google.com to validate token
-    const testUrl = `https://smallshorturl.myvippanel.shop/api?api=${encodeURIComponent(token)}&url=https://google.com`;
+    const testUrl = `https://Pikashort.myvippanel.shop/api?api=${encodeURIComponent(token)}&url=https://google.com`;
     const res = await axios.get(testUrl, { timeout: 8000 });
     const short =
       res.data?.shortenedUrl ||
