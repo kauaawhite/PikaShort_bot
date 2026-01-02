@@ -193,7 +193,7 @@ async function shortenSingle(chatId, url) {
   if (!isValid) throw new Error('INVALID_API_TOKEN');
 
   try {
-    const apiUrl = `https://smallshorturl.myvippanel.shop/api?api=${encodeURIComponent(token)}&url=${encodeURIComponent(url)}`;
+    const apiUrl = `https://PikaShort.myvippanel.shop/api?api=${encodeURIComponent(token)}&url=${encodeURIComponent(url)}`;
     const res = await axios.get(apiUrl, { timeout: 10000 });
 
     const short =
@@ -236,7 +236,7 @@ bot.on('message', async (msg) => {
     shortened = await shortenMultiple(chatId, links);
   } catch (err) {
     if (err.message === 'NO_API_TOKEN') {
-      return bot.sendMessage(chatId, "❌ Please set your Smallshorturl API Key first.\nUse: /api YOUR_API_KEY");
+      return bot.sendMessage(chatId, "❌ Please set your PikaShort API Key first.\nUse: /api YOUR_API_KEY");
     } else if (err.message === 'INVALID_API_TOKEN') {
       return bot.sendMessage(chatId, "❌ Your API Key seems invalid. Use /api YOUR_API_KEY to set a valid one.");
     } else {
